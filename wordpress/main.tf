@@ -420,3 +420,77 @@ EOD
     command = "aws ec2 wait instance-status-ok --instance-ids ${aws_instance.wp_dev.id} --profile superhero && ansible-playbook -i aws_hosts wordpress.yml"
   }
 }
+
+#load balancer
+
+resource "aws_elb" "wp_elb" {
+  name = "${var.domain_name}-elb"
+
+  subnets = ["${aws_subnet.wp_public1_subnet.id}",
+    "${aws_subnet.wp_public2_subnet.id}",
+  ]
+
+  security_groups = ["${aws_security_group.wp_public_sg.id}"]
+
+  listener {
+    instance_port     = 80
+    instance_protocol = "http"
+    lb_port           = 80
+    lb_protocol       = "http"
+  }
+
+  health_check {
+    healthy_threshold   = "${var.elb_healthy_threshold}"
+    unhealthy_threshold = "${var.elb_unhealthy_threshold}"
+    timeout             = "${var.elb_timeout}"
+    target              = "TCP:80"
+    interval            = "${var.elb_interval}"
+  }
+
+  cross_zone_load_balancing   = true
+  idle_timeout                = 400
+  connection_draining         = true
+  connection_draining_timeout = 400
+
+  tags {
+    Name = "wp_${var.domain_name}-elb"
+  }
+}
+
+#AMI
+
+resource "random_id" "golden_ami" {
+  byte_length = 8
+}
+
+resource "aws_ami_from_instance" "wp_golden" {
+  name               = "wp_ami-${random_id.golden_ami.b64}"
+  source_instance_id = "${aws_instance.wp_dev.id}"
+
+  provisioner "local-exec" {
+    command = <<EOT
+cat <<EOF > userdata
+#!/bin/bash
+/usr/bin/aws s3 sync s3://${aws_s3_bucket.code.bucket} /var/www/html/
+/bin/touch /var/spool/cron/root
+sudo /bin/echo '*/5 * * * * aws s3 sync s3://${aws_s3_bucket.code.bucket} /var/www/html/' >> /var/spool/cron/root
+EOF
+EOT
+  }
+}
+
+#launch configuration
+
+resource "aws_launch_configuration" "wp_lc" {
+  name_prefix          = "wp_lc-"
+  image_id             = "${aws_ami_from_instance.wp_golden.id}"
+  instance_type        = "${var.lc_instance_type}"
+  security_groups      = ["${aws_security_group.wp_private_sg.id}"]
+  iam_instance_profile = "${aws_iam_instance_profile.s3_access_profile.id}"
+  key_name             = "${aws_key_pair.wp_auth.id}"
+  user_data            = "${file("userdata")}"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
