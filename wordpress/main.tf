@@ -494,3 +494,86 @@ resource "aws_launch_configuration" "wp_lc" {
     create_before_destroy = true
   }
 }
+
+#ASG
+
+#resource "random_id" "rand_asg" {
+# byte_length = 8
+#}
+
+resource "aws_autoscaling_group" "wp_asg" {
+  name                      = "asg-${aws_launch_configuration.wp_lc.id}"
+  max_size                  = "${var.asg_max}"
+  min_size                  = "${var.asg_min}"
+  health_check_grace_period = "${var.asg_grace}"
+  health_check_type         = "${var.asg_hct}"
+  desired_capacity          = "${var.asg_cap}"
+  force_delete              = true
+  load_balancers            = ["${aws_elb.wp_elb.id}"]
+
+  vpc_zone_identifier = ["${aws_subnet.wp_private1_subnet.id}",
+    "${aws_subnet.wp_private2_subnet.id}",
+  ]
+
+  launch_configuration = "${aws_launch_configuration.wp_lc.name}"
+
+  tag {
+    key                 = "Name"
+    value               = "wp_asg-instance"
+    propagate_at_launch = true
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+#---------Route53-------------
+
+#primary zone
+
+resource "aws_route53_zone" "primary" {
+  name              = "${var.domain_name}.com"
+  delegation_set_id = "${var.delegation_set}"
+}
+
+#www
+
+resource "aws_route53_record" "www" {
+  zone_id = "${aws_route53_zone.primary.zone_id}"
+  name    = "www.${var.domain_name}.com"
+  type    = "A"
+
+  alias {
+    name                   = "${aws_elb.wp_elb.dns_name}"
+    zone_id                = "${aws_elb.wp_elb.zone_id}"
+    evaluate_target_health = false
+  }
+}
+
+#dev
+
+resource "aws_route53_record" "dev" {
+  zone_id = "${aws_route53_zone.primary.zone_id}"
+  name    = "dev.${var.domain_name}.com"
+  type    = "A"
+  ttl     = "300"
+  records = ["${aws_instance.wp_dev.public_ip}"]
+}
+
+#secondary zone
+
+resource "aws_route53_zone" "secondary" {
+  name   = "${var.domain_name}.com"
+  vpc_id = "${aws_vpc.wp_vpc.id}"
+}
+
+#db
+
+resource "aws_route53_record" "db" {
+  zone_id = "${aws_route53_zone.secondary.zone_id}"
+  name    = "db.${var.domain_name}.com"
+  type    = "CNAME"
+  ttl     = "300"
+  records = ["${aws_db_instance.wp_db.address}"]
+}
