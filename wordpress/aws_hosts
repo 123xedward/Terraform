@@ -1,0 +1,5 @@
+[dev]
+34.239.XXX.XXX
+[dev:vars]
+s3code=edward_mh
+domain=edwardmontes 
